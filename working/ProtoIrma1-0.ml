@@ -195,6 +195,8 @@ while true do
     isSpell !actionListR in
 
     if !chosenPath = [] then (
+    (*todo choose the potion with the best ratio (add urgency bonus)  *)
+    (*todo add support for learnable spells *)
         let bestRatio = ref (-1.) and myInv = witches.(0)#inventory
         and bestPot = ref 0 and gains = getGains spellList in prerr_endline  "gains : ";
         Array.map (fun l -> List.map (fun a-> print_array_int (a#delta)) l;prerr_endline "\n") gains;
@@ -210,7 +212,7 @@ while true do
             bestRatio := newRatio; chosenPath := path; bestPot := a#id
             )
         done; chosenPath := !chosenPath@[!bestPot]; print_liste_int !chosenPath;)
-    else (
+    else ( (*todo : optimize rest + change target if BREW isn't available *)
         match !chosenPath with
         |[] -> failwith "wtf c vide alors queyapa le vide"
         |x::xs -> (let y = idToA x !actionListR in
