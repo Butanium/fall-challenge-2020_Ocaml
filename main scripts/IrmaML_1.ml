@@ -2,9 +2,12 @@ module Toolbox = struct
     let (+=) i v = i:= !i+v
     let (+=.) i v = i:= !i +. v
     let rec contains l e = match l with
-    |x::xs -> if e = x then true else contains xs e
-    |[] -> false
+        |x::xs -> if e = x then true else contains xs e
+        |[] -> false
     let (@@) e l = contains l e
+    let rec remove e l = match l with
+        |[] -> l
+        |x::xs -> if x = e then xs else x::remove e xs
     let (+++) a b = let m = min (Array.length a) (Array.length b)
     in let l = Array.make m 0 in
     for k = 0 to m-1 do
@@ -13,13 +16,20 @@ module Toolbox = struct
     l
     let print_bool b = if b then print_string("true") else
 print_string("false")
-
-    let print_liste_int t = let r = ref "[" in
+	let print_liste_int t = let r = ref "[" in
     let rec aux l = match l with
     | [] -> ();
     |[x] -> r:= !r^string_of_int(x);
     | x::xs -> r:= !r^string_of_int(x)^"; "; aux xs
-    in aux t; prerr_endline (!r^"]")
+    in (aux t; prerr_endline (!r^"]");)
+    let string_of_list_int t = let r = ref "[" in
+    let rec aux l = match l with
+    | [] -> ()
+    |[x] -> r:= !r^string_of_int(x);
+    | x::xs -> r:= !r^string_of_int(x)^"; "; aux xs in (aux t;
+    !r^"]";)
+
+
 	let rec explode s = match s with
 		|"" -> []
 		|x -> x.[0]:: (explode (String.sub s 1 ((String.length s) - 1)))
@@ -92,7 +102,7 @@ end;;
 
 
 
-let rec idToA sid spells = match spells with
+let rec idToA sid actions = match actions with
 |[] -> failwith ("couldn't find the action : "^string_of_int(sid))
 |x::xs -> if x#id = sid then x else idToA sid xs;;
 
@@ -107,16 +117,7 @@ let rec aux spells = match spells with
 |[] -> () in aux spells; output;;
 
 
-let getMissingsI p inv =
-    let r = make 4 0 and t = ref true in
-    for i = 0 to 3 do
-        let d = p.(i) + inv.(i) in
-        r.(i) <- d;
-        if d < 0 then t := false;
-    done;
-    r, !t;;
 
-(*todo add return value diff which allow us to do tree search every turn*)
 let getLen potion_d inventory gains maxDepth=
     let q = Queue.create () in
     Queue.add ((potion_d +++ inventory), 0, []) q;
@@ -127,7 +128,10 @@ let getLen potion_d inventory gains maxDepth=
         crossGains xs inv len prPath in
     let rec aux x = let inv, len, prevPath = x and
         i = ref 0 in
-            while !i < 4 && inv.(!i) > 0 do
+(*            print_liste_int prevPath;*)
+(*            prerr_endline "vv inventory vv";*)
+(*            print_array_int inv;*)
+            while !i < 4 && inv.(!i) >= 0 do
                 incr i;
             done;
     if !i = 4  then (true, len, prevPath) else
@@ -137,16 +141,16 @@ let getLen potion_d inventory gains maxDepth=
             if inv.(3 - !i) < 0 then
             begin
                 t:= true;
-                crossGains gains.(!i) inv len prevPath;
+                crossGains gains.(3 - !i) inv len prevPath;
             end;
             incr i;
         done;
-     false, len, []
+     false, len, prevPath
      end
      in let test = ref false and resP = ref [] and resLen = ref 0 in
      while (not (Queue.is_empty q)) && not !test do
         let t, len, path = aux (Queue.take q) in if t then
-        (test := true; resP := path; resLen := len) else (if len> maxDepth then (test := true;
+        ((*prerr_endline "vvv I'm returnig this vvv"; print_liste_int path;*)test := true; resP := path; resLen := len) else (if len> maxDepth then (test := true;
         prerr_endline("search went too long"); resLen := (-1)))
      done;
      !resP, !resLen;;
@@ -154,6 +158,7 @@ let getLen potion_d inventory gains maxDepth=
 
 let chosenPath = ref [];;
 let nullAc = new action 0 "" 0 0 0 0 0 0 0 false false;;
+let goalPotion = ref (-1);;
 (* game loop *)
 while true do
 
@@ -192,30 +197,41 @@ while true do
     |[] -> []; in
     isSpell !actionListR in
 
-    if !chosenPath = [] then (
-        let bestRatio = ref (-1.) and myInv = witches.(0)#inventory
-        and bestPot = ref 0 and gains = getGains spellList in
-        Array.map (fun l -> List.map (fun a-> print_array_int (a#delta)) l;prerr_endline "\n") gains ;
-    for i = 0 to actioncount - 1 do
-        let a = actions.(i) in
-        if a#atype = "BREW" then
-
-            let price = a#price and path, len =  getLen a#delta myInv gains 100
+    if !chosenPath = [] || (try ((idToA !goalPotion !actionListR) = nullAc) with none -> true) then (
+    (*todo add support for learnable spells *)
+    let bestRatio = ref (-1.) and myInv = witches.(0)#inventory
+        and gains = getGains spellList in prerr_endline  "gains : ";
+        Array.map (fun l -> List.map (fun a-> print_array_int (a#delta)) l;prerr_endline "\n") gains;
+        prerr_endline "________________________";
+    let i = ref 0 in
+    while !i < actioncount do
+        let a = actions.(!i) in
+        if a#atype = "BREW" then(
+            let price = a#price + (if a#taxcount > 0 then a#tomeindex else 0) and path, len =  getLen a#delta myInv gains 100
             in let newRatio =  (float_of_int(price) /. float_of_int(len)) in
-            if (!bestRatio = (-1.) || !bestRatio < newRatio) && len >= 0 then
-                (bestRatio := newRatio; chosenPath := path; bestPot := a#id)
-            done; chosenPath := List.rev (!bestPot::!chosenPath))
-    else (
+            prerr_endline ("potion : "^string_of_int(a#id)^", ratio: "^string_of_float(newRatio)^", chosen? : "
+                ^string_of_bool(!bestRatio < newRatio || !bestRatio < 0.) );
+            print_liste_int path;
+            prerr_endline "";
+            if !bestRatio < newRatio || !bestRatio < 0. then
+            (bestRatio := newRatio; chosenPath := path; goalPotion := a#id);
+            );
+        i += 1;
+    done; chosenPath := !chosenPath@[!goalPotion]; print_liste_int !chosenPath;);
+    (resultString := "REST";
+    let rec crossPath l = match l with
+        |[] -> ()
+        |x::xs ->  let y = idToA x !actionListR in
+            if y#castable && (Array.fold_left (&&) true (Array.map (fun x -> x>=0) (witches.(0)#inventory +++ y#delta))) then
+                (resultString := y#atype ^ " " ^ string_of_int(y#id); chosenPath := remove x !chosenPath;)
+            else crossPath xs
+    in crossPath !chosenPath; if !resultString = "REST" then (
+        print_liste_int(!chosenPath);
         match !chosenPath with
-        |[] -> failwith "wtf c vide alors queyapa le vide"
-        |x::xs -> (let y = idToA x spellList in
-            if y#castable then
-                (resultString := y#atype ^ " " ^ string_of_int(y#id);
-                chosenPath := xs;)
-            else resultString := "REST"
+        |[x] -> let y = idToA x !actionListR in resultString := y#atype ^ " " ^ string_of_int(y#id); chosenPath := [];
+        |_ -> ()
         )
-
-        );
+    );
 
 
 
