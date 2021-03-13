@@ -88,7 +88,7 @@ class action (actionid:int) (actiontype:string) (delta0:int) delta1 delta2 delta
  method castable = castable
  method repeatable = repeatable
  end;;
-
+let nullAc = new action 0 "" 0 0 0 0 0 0 0 false false;;
 
 class witch (inv0:int) inv1 inv2 inv3 (score:int) =
 object (self)
@@ -115,13 +115,13 @@ let rec aux spells = match spells with
         if x#delta.(i) > 0 then output.(i) <- x::output.(i);
     done;
     if x#delta.(0) > 0 && witchInv.(0) >= x#tomeindex then(
-        prerr_endline (string_of_int(x#id)^", tomeindex : "^string_of_int(x#tomeindex));
-        prerr_endline(string_of_int(witchInv.(0))^" >= "^string_of_int(x#tomeindex));
+(*        prerr_endline (string_of_int(x#id)^", tomeindex : "^string_of_int(x#tomeindex));*)
+(*        prerr_endline(string_of_int(witchInv.(0))^" >= "^string_of_int(x#tomeindex));*)
         output.(0) <- x::output.(0););
     aux xs)
 |[] -> () in aux spells; output;;
 
-
+let endTime = ref 0.;;
 
 let getLen potion_d inventory gains maxDepth=
     let q = Queue.create () in
@@ -131,7 +131,8 @@ let getLen potion_d inventory gains maxDepth=
         |[] -> ()
         |x::xs -> let tL = x#tomeindex>0 && not ((x#id)@@learnL) in
         Queue.add (((x#delta)+++inv+++[|if tL then -x#tomeindex else 0;0;0;0|]), (len+1), ((x#id)::prPath),
-        (if tL then (x#id)::learnL else learnL)) q;
+        (if tL then (x#id)::learnL else learnL)) q; (* /!\ x#delta peut amener des bugs en apprenant des spells sans
+        qu'on ai assez de bleus si le spell en rapporte /!\*)
         crossGains xs inv len prPath learnL in
     let rec aux x = let inv, len, prevPath, learnList = x and
         i = ref 0 in
@@ -157,21 +158,47 @@ let getLen potion_d inventory gains maxDepth=
      in let test = ref false and resP = ref [] and resLen = ref 0 in
      while (not (Queue.is_empty q)) && not !test do
         let t, len, path = aux (Queue.take q) in if t then
-        ((*prerr_endline "vvv I'm returnig this vvv"; print_liste_int path;*)test := true; resP := path; resLen := len) else (if len> maxDepth then (test := true;
+        (test := true; resP := path; resLen := len)
+        else (if len> maxDepth || Sys.time() >= !endTime then (test := true;
         prerr_endline("search went too long"); resLen := (-1); resP := path))
      done;
      !resP, !resLen;;
 
 
+let fixLack al ing inv n rRef=
+let maxTryScore = ref (-1) in
+let rec aux l = match l with
+    |[] -> (*needBlue := !needRest*) ()
+    |x::xs -> prerr_endline("delta tried :"); print_array_int(x#delta);
+    if  (Array.fold_left (&&) true (Array.map (fun x -> x>= 0) (inv +++ x#delta))) &&
+    x#delta.(ing) > 0 && x#atype = "CAST" then (let useful = x#delta.(ing)+inv.(ing) >= n in
+        if useful then
+           (rRef := x#atype ^ " " ^ string_of_int(x#id);)
+        else (if (x#delta.(ing)> !maxTryScore ) then
+                (maxTryScore := x#delta.(ing);
+                rRef := "CAST" ^ " " ^ string_of_int(x#id););
+         aux xs);) else aux xs in aux al;;
+
+
+
+
+
+
+
+
 let chosenPath = ref [];;
 let toLearnSpells = ref [];;
-let nullAc = new action 0 "" 0 0 0 0 0 0 0 false false;;
+
 let goalPotion = ref (-1);;
+let globalGains = ref [||];;
+let validPath = ref true;;
+
 (* game loop *)
 while true do
-    (*todo add beamSearch and add a clock for the 50 ms*)
-
-    let resultString = ref "WAIT gnégné" and
+    (*todo add beamSearch, fix interdependants spells making the prgm stuck with a condition at the end*)
+    (*todo big remake of getlen in order to prevent those stuck statement *)
+    endTime :=  Sys.time() +. 0.045;
+    let resultString = ref "REST"  and allCast = ref true and
     actioncount = int_of_string (input_line stdin) (* the number of spells and recipes in play *)
     in let actions = make actioncount nullAc and actionListR = ref [] in
 
@@ -202,35 +229,37 @@ while true do
         witches.(i) <- (new witch inv0 inv1 inv2 inv3 score);
     done;
     let spellList = let rec isSpell l = match l with
-    |x::xs -> let t = (isSpell xs) in if x#atype = "CAST" || x#atype = "LEARN" then x::t else t
+    |x::xs -> let t = (isSpell xs) and c = (x#atype = "CAST") in (if c && !allCast && not x#castable then allCast :=false;
+              if c || x#atype = "LEARN" then x::t else t)
     |[] -> []; in
     isSpell !actionListR in
 
-    (
-    (*todo add support for learnable spells *)
+
+
     let bestRatio = ref (-1.) and myInv = witches.(0)#inventory
-        in let gains = getGains spellList (myInv) in prerr_endline  "gains : ";
-        Array.map (fun l -> List.map (fun a-> print_array_int (a#delta)) l;prerr_endline "\n") gains;
+        in globalGains := getGains spellList (myInv); prerr_endline  "gains : ";
+        Array.map (fun l -> List.map (fun a-> print_array_int (a#delta)) l;prerr_endline "\n") !globalGains;
         prerr_endline "________________________";
     let i = ref 0 in
     while !i < actioncount do
         let a = actions.(!i) in
         if a#atype = "BREW" then(
-            let price = a#price + (if a#taxcount > 0 then a#tomeindex else 0) and path, len =  getLen a#delta myInv gains 5
+            let price = a#price + (if a#taxcount > 0 then a#tomeindex else 0) and
+                path, len =  getLen a#delta myInv !globalGains 6
             in let newRatio =  (float_of_int(price) /. float_of_int(len)) in
             prerr_endline ("potion : "^string_of_int(a#id)^", ratio: "^string_of_float(newRatio)^", chosen? : "
-                ^string_of_bool(!bestRatio < newRatio || !bestRatio < 0.) );
+                ^string_of_bool((!bestRatio < newRatio || !bestRatio < 0.) && newRatio>0.) );
             print_liste_int path;
             prerr_endline "";
-            if !bestRatio < newRatio || !bestRatio < 0. then
+            if (!bestRatio < newRatio || !bestRatio < 0.) && newRatio>0. then
             (bestRatio := newRatio; chosenPath := path; goalPotion := a#id);
             );
         i += 1;
-    done; chosenPath := !chosenPath@[!goalPotion]; print_liste_int !chosenPath;);
-    resultString := "REST";
+    done; chosenPath := !chosenPath@[!goalPotion]; print_liste_int !chosenPath;
     toLearnSpells := (let rec ll p = match p with
         |[]->[]
-        |x::xs -> let y = idToA x !actionListR in if y#atype = "LEARN" then x::(ll xs) else ll xs in ll !chosenPath);
+        |x::xs -> let y = try idToA x !actionListR with none -> failwith "didn't find action" in if y#atype = "LEARN"
+            then x::(ll xs) else ll xs in try ll !chosenPath with none -> []);
     let need_action = ref true and needBlue = ref false and learnObj = ref (-1) and minC = ref 0 in
     if !toLearnSpells != [] then
     begin
@@ -239,6 +268,7 @@ while true do
             |x::xs ->  if !learnObj = -1 || (idToA x !actionListR)#tomeindex < !minC then
                 (learnObj := x; minC := (idToA x !actionListR)#tomeindex) in crossLearn !toLearnSpells;
         if  witches.(0)#inventory.(0) - !minC >= 0 then (resultString := "LEARN" ^" "^string_of_int(!learnObj);
+        prerr_endline("can learn");
         need_action := false;)
         else needBlue := true;
     end;
@@ -249,40 +279,54 @@ while true do
         let needRest = ref false and trySpell = ref nullAc and maxTryScore = ref (-1) in
         let rec crossPathB l = match l with
                     |[] -> (*needBlue := !needRest*) ()
-                    |x::xs ->  let y = idToA x !actionListR in
-                    if  (Array.fold_left (&&) true (Array.map (fun x -> x>= 0) (witches.(0)#inventory +++ y#delta))) &&
+                    |x::xs ->  let y = try idToA x !actionListR with none -> actions.(0) in
+                    if  y#atype = "CAST" && (Array.fold_left (&&) true (Array.map (fun x -> x>= 0) (witches.(0)#inventory +++ y#delta))) &&
                     y#delta.(0) > 0 then (let useful = y#delta.(0)+witches.(0)#inventory.(0) >= !minC in
                         if y#castable && useful then
                            (resultString := y#atype ^ " " ^ string_of_int(y#id); trySpell := y;
                            needRest := false)
-                        else (if useful then (needRest := true; resultString := "REST")
+                        else (if useful  then (needRest := true; resultString := "REST")
                                 else (if not !needRest && (y#delta.(0)> !maxTryScore ||
                                 (y#castable && not !trySpell#castable)) then
                                     (trySpell := y;maxTryScore := y#delta.(0);
                                     resultString := y#atype ^ " " ^ string_of_int(y#id); )
                                      );
-                             crossPathB xs);)
+                             crossPathB xs);) else crossPathB xs
                 in crossPathB !chosenPath;
             if not !needRest then chosenPath := remove !trySpell#id !chosenPath;
+        if !resultString = "REST" && !allCast then (
+        fixLack !globalGains.(0) 0 witches.(0)#inventory !minC resultString; prerr_endline(!resultString)
+        );
         );
         if not !needBlue then (
         let rec crossPath l = match l with
             |[] -> ()
-            |x::xs ->  let y = idToA x !actionListR in
+            |x::xs ->  let y = try idToA x !actionListR with none -> failwith "couldn't find the action'" in
                 if y#castable &&
                     (Array.fold_left (&&) true (Array.map (fun x -> x>=0) (witches.(0)#inventory +++ y#delta))) then
                     (resultString := y#atype ^ " " ^ string_of_int(y#id); chosenPath := remove x !chosenPath)
                     else crossPath xs
-        in crossPath !chosenPath;
-        if !resultString = "REST" then (
+        in try crossPath !chosenPath with none -> ();
+        if !resultString = "REST" then (try (
             print_liste_int(!chosenPath);
             match !chosenPath with
-            |[x] -> let y = idToA x !actionListR in resultString := y#atype ^ " " ^ string_of_int(y#id); chosenPath := [];
+            |[x] -> let y = try idToA x !actionListR with none -> failwith "couldn't find the action'" in
+            resultString := y#atype ^ " " ^ string_of_int(y#id); chosenPath := [];
             |_ -> ()
-            )
+            ) with none -> ();)
         );
     );
+    let i = ref 0 in try (
+    while !resultString = "REST" && !allCast && !i<4 do
+        let x::_ = !chosenPath and inv = witches.(0)#inventory in let y = try idToA x !actionListR
+            with none -> failwith  "couldn't find the action"
+        in let d = inv +++ y#delta
+        in
+        if d.(!i) < 0 then (fixLack !globalGains.(!i) !i inv (-d.(!i)) resultString;
+        if !resultString != "REST" then i:=4);
 
+        i += 1
+    done;) with none -> ();
 
 
 
